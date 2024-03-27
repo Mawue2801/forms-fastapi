@@ -1,7 +1,3 @@
-Certainly! Below is an industry-standard README template for your FastAPI application:
-
----
-
 # FastAPI Application
 
 [![Python Version](https://img.shields.io/badge/python-3.7%20%7C%203.8%20%7C%203.9-blue)](https://www.python.org/downloads/)
@@ -19,18 +15,14 @@ This is a FastAPI application for managing records in a database.
 - Input validation with Pydantic
 - Error handling with HTTPException
 
-## Prerequisites
-
-- Python 3.7 or higher
-- PostgreSQL database
 
 ## Installation
 
 1. Clone the repository:
 
     ```bash
-    git clone <repository-url>
-    cd fastapi-application
+    git clone https://github.com/Mawue2801/forms-fastapi.git
+    cd forms-fastapi
     ```
 
 2. Install the dependencies:
