@@ -1,6 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-from typing import List
 import os
 import asyncpg
 import json
@@ -11,13 +10,12 @@ load_dotenv()
 app = FastAPI()
 
 class Record(BaseModel):
-    id: int
     event_name: str
     parameters: dict
 
 # Database Connection Pool
 async def create_db_pool():
-    return await asyncpg.create_pool(
+    db_pool = await asyncpg.create_pool(
         user=os.getenv("DB_USER"),
         password=os.getenv("DB_PASSWORD"),
         database=os.getenv("DB_NAME"),
@@ -26,11 +24,12 @@ async def create_db_pool():
         min_size=1,
         max_size=5
     )
+    return db_pool
 
 # Endpoint to create the record
 @app.post("/records/")
-async def create_record(record: Record):
-    async with app.state.db_pool.acquire() as connection:
+async def create_record(record: Record, db_pool = Depends(create_db_pool)):
+    async with db_pool.acquire() as connection:
         try:
             parameters_json = json.dumps(record.parameters)
             record_id = await connection.fetchval("INSERT INTO records (event_name, parameters) VALUES ($1, $2) RETURNING id",
@@ -42,8 +41,8 @@ async def create_record(record: Record):
 
 # Endpoint to read all records for a given event name
 @app.get("/records/{event_name}/")
-async def read_records_by_event_name(event_name: str):
-    async with app.state.db_pool.acquire() as connection:
+async def read_records_by_event_name(event_name: str, db_pool = Depends(create_db_pool)):
+    async with db_pool.acquire() as connection:
         try:
             records = await connection.fetch(
                 "SELECT id, parameters FROM records WHERE event_name = $1", event_name)
@@ -54,8 +53,8 @@ async def read_records_by_event_name(event_name: str):
 
 # Endpoint to read one record given its id
 @app.get("/record/{record_id}/")
-async def read_record(record_id: int):
-    async with app.state.db_pool.acquire() as connection:
+async def read_record(record_id: int, db_pool = Depends(create_db_pool)):
+    async with db_pool.acquire() as connection:
         try:
             record = await connection.fetchrow(
                 "SELECT event_name, parameters FROM records WHERE id = $1", record_id)
@@ -69,8 +68,8 @@ async def read_record(record_id: int):
 
 # Endpoint to read all records
 @app.get("/records/")
-async def read_records():
-    async with app.state.db_pool.acquire() as connection:
+async def read_records(db_pool = Depends(create_db_pool)):
+    async with db_pool.acquire() as connection:
         try:
             records = await connection.fetch("SELECT id, event_name, parameters FROM records")
             return [{"id": record['id'], "event_name": record['event_name'], **json.loads(record['parameters'])}
@@ -81,8 +80,8 @@ async def read_records():
 
 # Endpoint to update a record
 @app.put("/record/{record_id}/")
-async def update_record(record_id: int, record: Record):
-    async with app.state.db_pool.acquire() as connection:
+async def update_record(record_id: int, record: Record, db_pool = Depends(create_db_pool)):
+    async with db_pool.acquire() as connection:
         try:
             parameters_json = json.dumps(record.parameters)
             await connection.execute("UPDATE records SET event_name = $1, parameters = $2 WHERE id = $3",
@@ -94,14 +93,21 @@ async def update_record(record_id: int, record: Record):
 
 # Endpoint to delete a record
 @app.delete("/record/{record_id}/")
-async def delete_record(record_id: int):
-    async with app.state.db_pool.acquire() as connection:
+async def delete_record(record_id: int, db_pool=Depends(create_db_pool)):
+    async with db_pool.acquire() as connection:
         try:
-            await connection.execute("DELETE FROM records WHERE id = $1", record_id)
-            return {"message": "Record deleted successfully"}
+            # Check if the record exists before deleting it
+            existing_record = await connection.fetchval(
+                "SELECT 1 FROM records WHERE id = $1", record_id)
+            if existing_record is not None:
+                await connection.execute("DELETE FROM records WHERE id = $1", record_id)
+                return {"message": "Record deleted successfully"}
+            else:
+                raise HTTPException(status_code=404, detail="Record not found")
         except Exception as e:
             print("Error:", e)
-            raise HTTPException(status_code=500, detail="Failed to delete record")
+            raise HTTPException(status_code=500, detail=f"Failed to delete record")
+
 
 # Register the database connection pool creation as a startup event handler
 app.add_event_handler("startup", create_db_pool)
