@@ -16,6 +16,10 @@ import jwt
 from datetime import datetime, timedelta
 from fastapi.staticfiles import StaticFiles
 import csv
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 
 load_dotenv()
 
@@ -40,6 +44,13 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ACCESS_TOKEN_EXPIRE_MINUTES = os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES")
 
 BASE_URL = os.getenv("BASE_URL")
+
+SENDER_EMAIL = os.getenv("SENDER_EMAIL")
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL")
+
+EVENT_NAME = os.getenv("EVENT_NAME")
+SPECIFIED_COLUMNS = os.getenv("SPECIFIED_COLUMNS")
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -104,14 +115,27 @@ async def index() -> responses.RedirectResponse:
 
 # Create event staff endpoint
 @app.post("/event-staff/", response_model=EventStaff)
-async def create_event_staff(staff: EventStaff, db_pool = Depends(create_db_pool)):
+async def create_event_staff(staff: EventStaff, event_name: str = EVENT_NAME, specified_columns: str = SPECIFIED_COLUMNS, db_pool=Depends(create_db_pool)):
     async with db_pool.acquire() as connection:
         try:
+            # Hash the password
             hashed_password = get_password_hash(staff.password)
+            
+            # Construct the SQL query with parameterized values
+            query = f"""
+                INSERT INTO event_staff (email, hashed_password, event_name, specified_columns)
+                VALUES ($1, $2, $3, $4)
+            """
+            
+            # Execute the SQL query with actual values
             await connection.execute(
-                "INSERT INTO event_staff (email, hashed_password) VALUES ($1, $2)",
-                staff.email, hashed_password
+                query,
+                staff.email,
+                hashed_password,
+                event_name,
+                specified_columns
             )
+            
             return staff
         except asyncpg.exceptions.UniqueViolationError:
             raise HTTPException(status_code=400, detail="Email already registered")
@@ -129,7 +153,7 @@ async def login(request: Request, email: str = Form(...), password: str = Form(.
     async with db_pool.acquire() as connection:
         # Query the database to check if the event_staff exists and the password is correct
         event_staff = await connection.fetchrow(
-            "SELECT id, email, hashed_password FROM event_staff WHERE email = $1", email)
+            "SELECT id, email, hashed_password, event_name, specified_columns FROM event_staff WHERE email = $1", email)
         if event_staff is None:
             raise HTTPException(status_code=401, detail="Invalid email or password")
         
@@ -142,7 +166,7 @@ async def login(request: Request, email: str = Form(...), password: str = Form(.
         access_token = create_access_token(data={"sub": email}, expires_delta=access_token_expires)
         # return {"access_token": access_token, "token_type": "bearer"}
         # Redirect the user to the desired URL after successful login
-        redirect_url = f"{BASE_URL}/records/Pax/?parameters=Name,Contact,Gender"
+        redirect_url = f"{BASE_URL}/records/{event_staff['event_name']}/?parameters={event_staff['specified_columns']}"
         return RedirectResponse(url=redirect_url, headers={"Authorization": f"Bearer {access_token}"})
 
 # Protected endpoint example
@@ -153,7 +177,7 @@ async def protected_route(current_user: str = Depends(get_current_user)):
 # Logout endpoint (just for demonstration, as JWT tokens are stateless)
 @app.post("/event-staff/logout/")
 async def event_staff_logout():
-    return {"message": "Successfully logged out"}
+    return RedirectResponse(url="/login")
 
 # Update event staff password endpoint
 @app.put("/event-staff/me/password/")
@@ -237,46 +261,61 @@ async def download_csv(response: Response):
 
     return FileResponse(file_path, media_type='text/csv', filename="data.csv")
 
-# Endpoint to upload CSV file
+# Function to send email
+async def send_email(subject, body, to_email, attachment_data, attachment_filename):
+    smtp_server = 'smtp.gmail.com'
+    smtp_port = 587
+
+    # Create the message
+    message = MIMEMultipart()
+    message['From'] = SENDER_EMAIL
+    message['To'] = to_email
+    message['Subject'] = subject
+
+    # Attach the body of the email
+    message.attach(MIMEText(body, 'plain'))
+
+    # Attach the file
+    attachment = MIMEApplication(attachment_data)
+    attachment.add_header('Content-Disposition', 'attachment', filename=attachment_filename)
+    message.attach(attachment)
+
+    try:
+        # Connect to the SMTP server
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            # Start the TLS connection
+            server.starttls()
+
+            # Login to your Gmail account
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+
+            # Send the email
+            server.sendmail(SENDER_EMAIL, to_email, message.as_string())
+        
+        # print("Email sent successfully!")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error sending email: {e}")
+
+# Endpoint to upload CSV file and send via email
 @app.post("/upload_csv/")
 async def upload_csv(file: UploadFile = File(...)):
     try:
-        # Create directory if it doesn't exist
-        directory = "files/uploads"
-        if not os.path.exists(directory):
-            os.makedirs(directory)
+        # Read the file content into memory
+        file_content = await file.read()
 
-        # Define file path
-        file_path = os.path.join(directory, file.filename)
+        # Send email with attachment
+        await send_email(subject="CSV File Uploaded",
+                         body=f"CSV file {file.filename} uploaded.",
+                         to_email=RECIPIENT_EMAIL,
+                         attachment_data=file_content,
+                         attachment_filename=file.filename)
 
-        # Save uploaded file
-        with open(file_path, "wb") as buffer:
-            buffer.write(await file.read())
-
-        return {"message": f"File '{file.filename}' uploaded successfully to '{file_path}'"}
+        return {"message": f"File '{file.filename}' uploaded successfully and sent via email."}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error uploading file: {e}")
+        raise HTTPException(status_code=500, detail=f"Error uploading file and sending email: {e}")
     
-# Endpoint to list uploaded file names
-@app.get("/list_files/")
-async def list_files():
-    try:
-        # Define directory path
-        directory = "files/uploads"
-
-        # Check if directory exists
-        if not os.path.exists(directory):
-            raise HTTPException(status_code=404, detail="No files uploaded")
-
-        # Get list of file names
-        files = os.listdir(directory)
-
-        return {"files": files}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error listing files: {e}")
-
 # Endpoint to create the record
 @app.post("/records/")
 async def create_record(record: Record, db_pool = Depends(create_db_pool)):
