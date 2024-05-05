@@ -394,14 +394,14 @@ async def read_records(db_pool = Depends(create_db_pool)):
 
 # Endpoint to update a record
 @app.put("/record/{code}/")
-async def update_record(code: str, record: Record, db_pool=Depends(create_db_pool)):
+async def update_record(code: str, record: Record, signed_in: Optional[bool] = None, signed_out: Optional[bool] = None, db_pool=Depends(create_db_pool)):
     async with db_pool.acquire() as connection:
         try:
             parameters_json = json.dumps(record.parameters)
             # Modify the SQL query to update all columns based on the code
             await connection.execute(
                 "UPDATE records SET event_name = $1, parameters = $2, signed_in = $3, signed_out = $4 WHERE code = $5",
-                record.event_name, parameters_json, record.signed_in, record.signed_out, code)
+                record.event_name, parameters_json, signed_in, signed_out, code)
             return {"code": code, **record.dict()}
         except Exception as e:
             print("Error:", e)
