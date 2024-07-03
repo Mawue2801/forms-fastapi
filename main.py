@@ -68,7 +68,7 @@ class EmailRequest(BaseModel):
     email: EmailStr
     otp: str
 
-def send_email(recipient_email: str, otp: str):
+def send_otp_email(recipient_email: str, otp: str):
     sender_email = SENDER_EMAIL
     sender_password = SENDER_PASSWORD
 
@@ -91,7 +91,7 @@ def send_email(recipient_email: str, otp: str):
 
 @app.post("/send-otp")
 def send_otp(request: EmailRequest):
-    send_email(request.email, request.otp)
+    send_otp_email(request.email, request.otp)
     return {"message": "OTP sent successfully"}    
 
 # Database Connection Pool
