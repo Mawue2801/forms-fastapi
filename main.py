@@ -4,7 +4,7 @@ from starlette.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from starlette.responses import HTMLResponse, FileResponse
 from starlette.requests import Request
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 import os
 import asyncpg
 import json
@@ -63,6 +63,36 @@ class EventStaff(BaseModel):
 class Record(BaseModel):
     event_name: str
     parameters: dict
+
+class EmailRequest(BaseModel):
+    email: EmailStr
+    otp: str
+
+def send_email(recipient_email: str, otp: str):
+    sender_email = SENDER_EMAIL
+    sender_password = SENDER_PASSWORD
+
+    message = MIMEMultipart()
+    message["From"] = sender_email
+    message["To"] = recipient_email
+    message["Subject"] = "Your OTP Code"
+
+    body = f"Your OTP code is: {otp}"
+    message.attach(MIMEText(body, "plain"))
+
+    try:
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, recipient_email, message.as_string())
+        server.close()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
+
+@app.post("/send-otp")
+def send_otp(request: EmailRequest):
+    send_email(request.email, request.otp)
+    return {"message": "OTP sent successfully"}    
 
 # Database Connection Pool
 async def create_db_pool():
